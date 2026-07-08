@@ -1,0 +1,6 @@
+{
+  "name": "Jigsaw Puzzle",
+  "description": "A modern, commercial-grade jigsaw puzzle game featuring responsive piece mechanics, difficulty adjustments, customized photo uploads, and sleek, teenager-friendly dark design.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
