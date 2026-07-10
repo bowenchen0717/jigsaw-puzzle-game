@@ -69,6 +69,9 @@ class PuzzleGameViewModel(private val repository: PuzzleRepository) : ViewModel(
         val pieceHeight = boardHeight / gridRows
         val list = mutableListOf<PuzzlePiece>()
         
+        val totalPieces = gridRows * gridCols
+        val shuffledIndices = (0 until totalPieces).toList().shuffled()
+        
         for (row in 0 until gridRows) {
             for (col in 0 until gridCols) {
                 val id = row * gridCols + col
@@ -90,7 +93,8 @@ class PuzzleGameViewModel(private val repository: PuzzleRepository) : ViewModel(
                         currentX = randomX,
                         currentY = randomY,
                         isLocked = false,
-                        isDragging = false
+                        isDragging = false,
+                        shuffleOrder = shuffledIndices[id]
                     )
                 )
             }
@@ -161,6 +165,9 @@ class PuzzleGameViewModel(private val repository: PuzzleRepository) : ViewModel(
             val pieceHeight = boardHeight / gridRows
             val list = mutableListOf<PuzzlePiece>()
 
+            val totalPieces = gridRows * gridCols
+            val shuffledIndices = (0 until totalPieces).toList().shuffled()
+
             for (row in 0 until gridRows) {
                 for (col in 0 until gridCols) {
                     val id = row * gridCols + col
@@ -181,7 +188,8 @@ class PuzzleGameViewModel(private val repository: PuzzleRepository) : ViewModel(
                             currentX = randomX,
                             currentY = randomY,
                             isLocked = false,
-                            isDragging = false
+                            isDragging = false,
+                            shuffleOrder = shuffledIndices[id]
                         )
                     )
                 }

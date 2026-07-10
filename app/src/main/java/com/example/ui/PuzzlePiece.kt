@@ -9,5 +9,6 @@ data class PuzzlePiece(
     val currentX: Float,   // current X coordinate in DP
     val currentY: Float,   // current Y coordinate in DP
     val isLocked: Boolean = false,
-    val isDragging: Boolean = false
+    val isDragging: Boolean = false,
+    val shuffleOrder: Int = 0
 )

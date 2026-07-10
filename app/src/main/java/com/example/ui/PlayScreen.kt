@@ -94,6 +94,13 @@ fun PlayScreen(
         }
     }
 
+    // Trigger victory sound once completed
+    LaunchedEffect(matchState.isVictory) {
+        if (matchState.isVictory) {
+            audioPlayer.playPuzzleComplete()
+        }
+    }
+
     // Timer formatting
     val minutes = matchState.timerSeconds / 60
     val seconds = matchState.timerSeconds % 60
@@ -114,7 +121,10 @@ fun PlayScreen(
                     },
                     navigationIcon = {
                         IconButton(
-                            onClick = onNavigateBack,
+                            onClick = {
+                                audioPlayer.playPageFlip()
+                                onNavigateBack()
+                            },
                             modifier = Modifier.testTag("play_back_button")
                         ) {
                             Icon(
@@ -127,7 +137,10 @@ fun PlayScreen(
                     actions = {
                         // Toggle Fullscreen
                         IconButton(
-                            onClick = { isFullscreen = true },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                isFullscreen = true
+                            },
                             modifier = Modifier
                                 .background(Color.Transparent, CircleShape)
                                 .testTag("fullscreen_toggle_button")
@@ -141,7 +154,10 @@ fun PlayScreen(
 
                         // Toggle showing/hiding the background stencil guide on the board
                         IconButton(
-                            onClick = { showStencil = !showStencil },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                showStencil = !showStencil
+                            },
                             modifier = Modifier
                                 .background(
                                     if (showStencil) NeonCyan.copy(alpha = 0.2f) else Color.Transparent,
@@ -157,7 +173,10 @@ fun PlayScreen(
 
                         // Hold or click eye to preview full image
                         IconButton(
-                            onClick = { viewModel.togglePreview(!matchState.showPreview) },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                viewModel.togglePreview(!matchState.showPreview)
+                            },
                             modifier = Modifier
                                 .background(
                                     if (matchState.showPreview) NeonCyan.copy(alpha = 0.2f) else Color.Transparent,
@@ -172,7 +191,10 @@ fun PlayScreen(
                             )
                         }
                         IconButton(
-                            onClick = { viewModel.resetMatch() },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                viewModel.resetMatch()
+                            },
                             modifier = Modifier.testTag("reset_button")
                         ) {
                             Icon(
@@ -257,7 +279,7 @@ fun PlayScreen(
                     Spacer(modifier = Modifier.height(72.dp))
                 }
 
-                val trayPieces = matchState.pieces.filter { !it.isLocked && !it.isDragging && it.currentY >= 340f }.sortedBy { it.id }
+                val trayPieces = matchState.pieces.filter { !it.isLocked && !it.isDragging && it.currentY >= 340f }.sortedBy { it.shuffleOrder }
                 val pWidth = matchState.boardWidth / matchState.gridCols
                 val pHeight = matchState.boardHeight / matchState.gridRows
                 val gap = 16f
@@ -292,16 +314,23 @@ fun PlayScreen(
                         }
                     }
 
+                    val scaledWidth = 320.dp * scaleFactor
+                    val scaledHeight = 500.dp * scaleFactor
+
                     Box(
-                        modifier = Modifier
-                            .requiredSize(320.dp, 500.dp)
-                            .graphicsLayer {
-                                scaleX = scaleFactor
-                                scaleY = scaleFactor
-                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin.Center
-                            }
-                            .testTag("puzzle_game_box")
+                        modifier = Modifier.requiredSize(scaledWidth, scaledHeight),
+                        contentAlignment = Alignment.Center
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .requiredSize(320.dp, 500.dp)
+                                .graphicsLayer {
+                                    scaleX = scaleFactor
+                                    scaleY = scaleFactor
+                                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin.Center
+                                }
+                                .testTag("puzzle_game_box")
+                        ) {
                         // 1. The Background Target Board Box (centered based on aspect ratio)
                         Box(
                             modifier = Modifier
@@ -368,6 +397,7 @@ fun PlayScreen(
                         if (trayScrollState.value > 0) {
                             IconButton(
                                 onClick = {
+                                    audioPlayer.playButtonClick()
                                     scope.launch {
                                         val target = (trayScrollState.value - 120 * density).roundToInt().coerceAtLeast(0)
                                         trayScrollState.animateScrollTo(target)
@@ -392,6 +422,7 @@ fun PlayScreen(
                         if (trayScrollState.value < trayScrollState.maxValue) {
                             IconButton(
                                 onClick = {
+                                    audioPlayer.playButtonClick()
                                     scope.launch {
                                         val target = (trayScrollState.value + 120 * density).roundToInt().coerceAtMost(trayScrollState.maxValue)
                                         trayScrollState.animateScrollTo(target)
@@ -449,16 +480,65 @@ fun PlayScreen(
                                     defaultY = defaultY,
                                     density = density,
                                     onDragStart = { startX, startY ->
-                                        // audioPlayer.play(R.raw.click)
+                                        audioPlayer.playPickup()
                                         viewModel.startDragging(piece.id, startX, startY)
                                     },
                                     onDragEnd = { finalX, finalY ->
-                                        // audioPlayer.play(R.raw.click)
                                         val finalYAdjusted = if (finalY >= 340f) 350f else finalY
+                                        
+                                        val pWidth = matchState.boardWidth / matchState.gridCols
+                                        val pHeight = matchState.boardHeight / matchState.gridRows
+                                        val thresholdX = (pWidth * 0.45f).coerceIn(32f, 48f)
+                                        val thresholdY = (pHeight * 0.45f).coerceIn(32f, 48f)
+
+                                        val distanceX = Math.abs(finalX - piece.targetLeft)
+                                        val distanceY = Math.abs(finalYAdjusted - piece.targetTop)
+                                        val isCloseEnough = distanceX < thresholdX && distanceY < thresholdY
+
+                                        if (isCloseEnough) {
+                                            val hasAdjacentLocked = matchState.pieces.any { other ->
+                                                other.isLocked && other.id != piece.id && (
+                                                    (other.row == piece.row && Math.abs(other.col - piece.col) == 1) ||
+                                                    (other.col == piece.col && Math.abs(other.row - piece.row) == 1)
+                                                )
+                                            }
+                                            if (hasAdjacentLocked) {
+                                                audioPlayer.playConnect()
+                                            } else {
+                                                audioPlayer.playSnap()
+                                            }
+                                        } else {
+                                            val isInsideBoard = finalX >= 0 && finalX <= matchState.boardWidth && finalYAdjusted >= 0 && finalYAdjusted <= matchState.boardHeight
+                                            if (isInsideBoard) {
+                                                audioPlayer.playWrongPlace()
+                                            } else {
+                                                audioPlayer.playDrop()
+                                            }
+                                        }
+
                                         viewModel.stopDragging(piece.id, finalX, finalYAdjusted)
                                     },
                                     onDrag = { deltaX, deltaY ->
                                         viewModel.dragPiece(piece.id, deltaX, deltaY)
+                                        val p = matchState.pieces.find { it.id == piece.id }
+                                        if (p != null) {
+                                            val pWidth = matchState.boardWidth / matchState.gridCols
+                                            val pHeight = matchState.boardHeight / matchState.gridRows
+                                            val tX = (pWidth * 0.45f).coerceIn(32f, 48f)
+                                            val tY = (pHeight * 0.45f).coerceIn(32f, 48f)
+                                            
+                                            val nextX = p.currentX + deltaX
+                                            val nextY = p.currentY + deltaY
+                                            val dX = Math.abs(nextX - p.targetLeft)
+                                            val dY = Math.abs(nextY - p.targetTop)
+                                            
+                                            val nowClose = dX < tX && dY < tY
+                                            val wasClose = Math.abs(p.currentX - p.targetLeft) < tX && Math.abs(p.currentY - p.targetTop) < tY
+                                            
+                                            if (nowClose && !wasClose) {
+                                                audioPlayer.playTick()
+                                            }
+                                        }
                                     },
                                     isInTray = isInTray,
                                     onTrayScroll = { deltaX ->
@@ -468,6 +548,7 @@ fun PlayScreen(
                             }
                         }
                     }
+                }
                 }
             }
 
@@ -482,7 +563,10 @@ fun PlayScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
-                        onClick = { isFullscreen = false },
+                        onClick = {
+                            audioPlayer.playButtonClick()
+                            isFullscreen = false
+                        },
                         modifier = Modifier
                             .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                             .border(BorderStroke(1.dp, NeonCyan.copy(alpha = 0.4f)), CircleShape)
@@ -523,7 +607,10 @@ fun PlayScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { showStencil = !showStencil },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                showStencil = !showStencil
+                            },
                             modifier = Modifier
                                 .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                                 .border(BorderStroke(1.dp, if (showStencil) NeonCyan else BorderColor.copy(alpha = 0.3f)), CircleShape)
@@ -536,7 +623,10 @@ fun PlayScreen(
                         }
 
                         IconButton(
-                            onClick = { viewModel.togglePreview(!matchState.showPreview) },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                viewModel.togglePreview(!matchState.showPreview)
+                            },
                             modifier = Modifier
                                 .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                                 .border(BorderStroke(1.dp, if (matchState.showPreview) NeonCyan else BorderColor.copy(alpha = 0.3f)), CircleShape)
@@ -551,7 +641,10 @@ fun PlayScreen(
                         }
 
                         IconButton(
-                            onClick = { viewModel.resetMatch() },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                viewModel.resetMatch()
+                            },
                             modifier = Modifier
                                 .background(Color.Black.copy(alpha = 0.6f), CircleShape)
                                 .border(BorderStroke(1.dp, BorderColor.copy(alpha = 0.3f)), CircleShape)
@@ -645,7 +738,7 @@ fun PlayScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(24.dp))
-                            .background(CyberSurface)
+                            .background(Color(0xFF161421))
                             .border(
                                 BorderStroke(2.dp, Brush.linearGradient(listOf(NeonPink, NeonCyan))),
                                 RoundedCornerShape(24.dp)
@@ -722,7 +815,10 @@ fun PlayScreen(
 
                         // Controls
                         Button(
-                            onClick = { viewModel.resetMatch() },
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                viewModel.resetMatch()
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = NeonPink),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -740,7 +836,10 @@ fun PlayScreen(
                         }
 
                         Button(
-                            onClick = onNavigateBack,
+                            onClick = {
+                                audioPlayer.playPageFlip()
+                                onNavigateBack()
+                            },
                             colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
                             border = BorderStroke(1.dp, BorderColor),
                             modifier = Modifier
@@ -809,67 +908,82 @@ fun PuzzlePieceItem(
         defaultY
     }
 
-    Box(
-        modifier = Modifier
-            .offset { IntOffset((currentX * density).roundToInt(), (currentY * density).roundToInt()) }
-            .size(pieceWidth.dp, pieceHeight.dp)
-            .pointerInput(piece.id) {
-                detectDragGestures(
-                    onDragStart = {
-                        if (currentIsLocked) return@detectDragGestures
-                        isDraggingLocal = true
-                        localOffsetX = 0f
-                        localOffsetY = 0f
-                        hasPickedUp = !currentIsInTray
-                        if (hasPickedUp) {
-                            currentOnDragStart(currentDefaultX, currentDefaultY)
-                        }
-                    },
-                    onDragEnd = {
-                        if (currentIsLocked) return@detectDragGestures
-                        val finalX = if (hasPickedUp) currentDefaultX else currentDefaultX + localOffsetX
-                        val finalY = if (hasPickedUp) currentDefaultY else currentDefaultY + localOffsetY
-                        isDraggingLocal = false
-                        hasPickedUp = false
-                        currentOnDragEnd(finalX, finalY)
-                    },
-                    onDragCancel = {
-                        if (currentIsLocked) return@detectDragGestures
-                        val finalX = if (hasPickedUp) currentDefaultX else currentDefaultX + localOffsetX
-                        val finalY = if (hasPickedUp) currentDefaultY else currentDefaultY + localOffsetY
-                        isDraggingLocal = false
-                        hasPickedUp = false
-                        currentOnDragEnd(finalX, finalY)
-                    },
-                    onDrag = { change, dragAmount ->
-                        if (currentIsLocked) return@detectDragGestures
-                        change.consume()
-                        val deltaX = dragAmount.x / density
-                        val deltaY = dragAmount.y / density
+    val touchWidth = if (piece.isLocked) pieceWidth else maxOf(pieceWidth, 56f)
+    val touchHeight = if (piece.isLocked) pieceHeight else maxOf(pieceHeight, 56f)
+    val extraWidth = touchWidth - pieceWidth
+    val extraHeight = touchHeight - pieceHeight
 
-                        localOffsetX += deltaX
-                        localOffsetY += deltaY
+    val touchX = currentX - extraWidth / 2f
+    val touchY = currentY - extraHeight / 2f
 
-                        if (currentIsInTray && !hasPickedUp) {
-                            if (Math.abs(localOffsetX) > Math.abs(localOffsetY) && Math.abs(localOffsetX) > 8f) {
-                                currentOnTrayScroll(dragAmount.x)
-                                localOffsetX = 0f
-                                localOffsetY = 0f
-                            } else if (localOffsetY < -12f || Math.abs(localOffsetY) > 15f) {
-                                hasPickedUp = true
-                                currentOnDragStart(currentDefaultX + localOffsetX, currentDefaultY + localOffsetY)
-                                localOffsetX = 0f
-                                localOffsetY = 0f
-                            }
-                        } else {
-                            currentOnDrag(deltaX, deltaY)
-                        }
+    val baseModifier = Modifier
+        .offset { IntOffset((touchX * density).roundToInt(), (touchY * density).roundToInt()) }
+        .size(touchWidth.dp, touchHeight.dp)
+
+    val pointerModifier = if (piece.isLocked) {
+        baseModifier
+    } else {
+        baseModifier.pointerInput(piece.id) {
+            detectDragGestures(
+                onDragStart = {
+                    if (currentIsLocked) return@detectDragGestures
+                    isDraggingLocal = true
+                    localOffsetX = 0f
+                    localOffsetY = 0f
+                    hasPickedUp = !currentIsInTray
+                    if (hasPickedUp) {
+                        currentOnDragStart(currentDefaultX, currentDefaultY)
                     }
-                )
-            }
-            .testTag("piece_${piece.id}")
+                },
+                onDragEnd = {
+                    if (currentIsLocked) return@detectDragGestures
+                    val finalX = if (hasPickedUp) currentDefaultX else currentDefaultX + localOffsetX
+                    val finalY = if (hasPickedUp) currentDefaultY else currentDefaultY + localOffsetY
+                    isDraggingLocal = false
+                    hasPickedUp = false
+                    currentOnDragEnd(finalX, finalY)
+                },
+                onDragCancel = {
+                    if (currentIsLocked) return@detectDragGestures
+                    val finalX = if (hasPickedUp) currentDefaultX else currentDefaultX + localOffsetX
+                    val finalY = if (hasPickedUp) currentDefaultY else currentDefaultY + localOffsetY
+                    isDraggingLocal = false
+                    hasPickedUp = false
+                    currentOnDragEnd(finalX, finalY)
+                },
+                onDrag = { change, dragAmount ->
+                    if (currentIsLocked) return@detectDragGestures
+                    change.consume()
+                    val deltaX = dragAmount.x / density
+                    val deltaY = dragAmount.y / density
+
+                    localOffsetX += deltaX
+                    localOffsetY += deltaY
+
+                    if (currentIsInTray && !hasPickedUp) {
+                        if (Math.abs(localOffsetX) > Math.abs(localOffsetY) && Math.abs(localOffsetX) > 8f) {
+                            currentOnTrayScroll(dragAmount.x)
+                            localOffsetX = 0f
+                            localOffsetY = 0f
+                        } else if (localOffsetY < -12f || Math.abs(localOffsetY) > 15f) {
+                            hasPickedUp = true
+                            currentOnDragStart(currentDefaultX + localOffsetX, currentDefaultY + localOffsetY)
+                            localOffsetX = 0f
+                            localOffsetY = 0f
+                        }
+                    } else {
+                        currentOnDrag(deltaX, deltaY)
+                    }
+                }
+            )
+        }
+    }
+
+    Box(
+        modifier = pointerModifier.testTag("piece_${piece.id}"),
+        contentAlignment = Alignment.Center
     ) {
-        Canvas(modifier = Modifier.fillMaxSize()) {
+        Canvas(modifier = Modifier.size(pieceWidth.dp, pieceHeight.dp)) {
             val pWidth = size.width
             val pHeight = size.height
 

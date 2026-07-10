@@ -1,11 +1,13 @@
 package com.example
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -19,6 +21,10 @@ import com.example.ui.AudioPlayer
 import com.example.ui.PuzzleGameViewModel
 import com.example.ui.ViewModelFactory
 import com.example.ui.theme.MyApplicationTheme
+import com.google.android.play.core.appupdate.AppUpdateManager
+import com.google.android.play.core.appupdate.AppUpdateManagerFactory
+import com.google.android.play.core.install.model.AppUpdateType
+import com.google.android.play.core.install.model.UpdateAvailability
 
 sealed class Screen {
     object Home : Screen()
@@ -32,8 +38,13 @@ class MainActivity : ComponentActivity() {
         ViewModelFactory((application as PuzzleApplication).repository)
     }
 
+    private lateinit var appUpdateManager: AppUpdateManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appUpdateManager = AppUpdateManagerFactory.create(this)
+        checkForUpdates()
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
@@ -46,27 +57,31 @@ class MainActivity : ComponentActivity() {
                     currentScreen = Screen.Home
                 }
 
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Box(modifier = Modifier.fillMaxSize()) {
                     when (val screen = currentScreen) {
                         is Screen.Home -> {
                             HomeScreen(
                                 viewModel = viewModel,
+                                audioPlayer = audioPlayer,
                                 onNavigateToPlay = { id, title, source, size ->
+                                    audioPlayer.playPageFlip()
                                     viewModel.startMatch(id, title, source, size)
                                     currentScreen = Screen.Play(id, title, source, size)
                                 },
                                 onNavigateToSettings = {
+                                    audioPlayer.playPageFlip()
                                     currentScreen = Screen.Settings
                                 },
-                                modifier = Modifier.padding(innerPadding)
+                                modifier = Modifier
                             )
                         }
                         is Screen.Settings -> {
                             SettingsScreen(
+                                audioPlayer = audioPlayer,
                                 onNavigateBack = {
                                     currentScreen = Screen.Home
                                 },
-                                modifier = Modifier.padding(innerPadding)
+                                modifier = Modifier
                             )
                         }
                         is Screen.Play -> {
@@ -76,12 +91,65 @@ class MainActivity : ComponentActivity() {
                                 onNavigateBack = {
                                     currentScreen = Screen.Home
                                 },
-                                modifier = Modifier.padding(innerPadding)
+                                modifier = Modifier
                             )
                         }
                     }
                 }
             }
         }
+    }
+
+    private fun checkForUpdates() {
+        val appUpdateInfoTask = appUpdateManager.appUpdateInfo
+        appUpdateInfoTask.addOnSuccessListener { appUpdateInfo ->
+            if (appUpdateInfo.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE
+                && appUpdateInfo.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)
+            ) {
+                try {
+                    appUpdateManager.startUpdateFlowForResult(
+                        appUpdateInfo,
+                        AppUpdateType.IMMEDIATE,
+                        this,
+                        UPDATE_REQUEST_CODE
+                    )
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::appUpdateManager.isInitialized) {
+            appUpdateManager.appUpdateInfo.addOnSuccessListener { appUpdateInfo ->
+                if (appUpdateInfo.updateAvailability() == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
+                    try {
+                        appUpdateManager.startUpdateFlowForResult(
+                            appUpdateInfo,
+                            AppUpdateType.IMMEDIATE,
+                            this,
+                            UPDATE_REQUEST_CODE
+                        )
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == UPDATE_REQUEST_CODE) {
+            if (resultCode != RESULT_OK) {
+                android.util.Log.e("MainActivity", "In-app update failed or was cancelled by user. Result code: $resultCode")
+            }
+        }
+    }
+
+    companion object {
+        private const val UPDATE_REQUEST_CODE = 1234
     }
 }

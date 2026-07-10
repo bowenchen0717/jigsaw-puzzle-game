@@ -48,11 +48,16 @@ import com.example.R
 import com.example.ui.theme.*
 import java.io.File
 import java.io.FileOutputStream
+import androidx.compose.ui.window.Dialog
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.filled.Close
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: PuzzleGameViewModel,
+    audioPlayer: AudioPlayer,
     onNavigateToPlay: (id: String, title: String, source: Any, size: Int) -> Unit,
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier
@@ -62,16 +67,24 @@ fun HomeScreen(
     val historyList by viewModel.historyList.collectAsStateWithLifecycle()
 
     var selectedGridSize by remember { mutableStateOf(3) } // Default 3x3
-    var isAnimalCategory by remember { mutableStateOf(false) }
-    val filteredPresets = remember(isAnimalCategory) {
-        PuzzlePresets.list.filter {
-            if (isAnimalCategory) it.category == PresetPuzzle.Category.ANIMALS
-            else it.category == PresetPuzzle.Category.ABSTRACT
-        }
+    var selectedCategory by remember { mutableStateOf(PresetPuzzle.Category.ABSTRACT) }
+    val filteredPresets = remember(selectedCategory) {
+        PuzzlePresets.list.filter { it.category == selectedCategory }
     }
-    val dailyPreset = filteredPresets.firstOrNull()
-    val dailyRecord = dailyPreset?.let { preset ->
-        historyList.find { it.puzzleId == preset.id && it.difficulty == selectedGridSize }
+    val calendar = remember { java.util.Calendar.getInstance() }
+    val year = calendar.get(java.util.Calendar.YEAR)
+    val month = calendar.get(java.util.Calendar.MONTH) + 1
+    val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+    val dateString = String.format("%04d-%02d-%02d", year, month, day)
+    val dailyChallengeId = "daily_$dateString"
+
+    val dailyPreset = remember(year, month, day) {
+        val seed = year * 10000 + month * 100 + day
+        val index = (seed % PuzzlePresets.list.size).let { if (it < 0) -it else it }
+        PuzzlePresets.list.getOrNull(index) ?: PuzzlePresets.list.first()
+    }
+    val dailyRecord = remember(dailyChallengeId, selectedGridSize, historyList) {
+        historyList.find { it.puzzleId == dailyChallengeId && it.difficulty == selectedGridSize }
     }
     val dailyIsCompleted = dailyRecord?.isCompleted == true
     val dailyProgressFraction = if (dailyIsCompleted) 1.0f else 0.0f
@@ -80,6 +93,8 @@ fun HomeScreen(
     var showCustomNameDialog by remember { mutableStateOf(false) }
     var pendingCustomUri by remember { mutableStateOf<Uri?>(null) }
     var customPuzzleName by remember { mutableStateOf("") }
+    var selectedPresetForDetail by remember { mutableStateOf<PresetPuzzle?>(null) }
+    var isDailyChallengeSelected by remember { mutableStateOf(false) }
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -177,7 +192,7 @@ fun HomeScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(162.dp)
+                        .wrapContentHeight()
                         .clip(RoundedCornerShape(28.dp))
                         .background(
                             Brush.linearGradient(
@@ -191,8 +206,8 @@ fun HomeScreen(
                         .padding(18.dp)
                 ) {
                     Column(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -208,7 +223,7 @@ fun HomeScreen(
                                         .padding(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
                                     Text(
-                                        text = "DAILY CHALLENGE",
+                                        text = "DAILY CHALLENGE • $dateString",
                                         color = Color.White,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Black,
@@ -217,12 +232,23 @@ fun HomeScreen(
                                 }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = "霓虹午夜都市\nMidnight Neon",
+                                    text = (dailyPreset?.titleCn ?: "") + "\n" + (dailyPreset?.titleEn ?: ""),
                                     color = Color.White,
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Black,
-                                    lineHeight = 22.sp
+                                    lineHeight = 22.sp,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
+                                if (dailyIsCompleted && dailyRecord != null) {
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = "🏆 今日已通關！最佳: ${dailyRecord.bestTime}秒 | ${dailyRecord.bestMoves}步",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                             
                             val dailyPainter = rememberAsyncImagePainter(
@@ -281,8 +307,9 @@ fun HomeScreen(
                                 onClick = {
                                     val firstPreset = dailyPreset
                                     if (firstPreset != null) {
-                                        val src = firstPreset.imageRes!!
-                                        onNavigateToPlay(firstPreset.id, firstPreset.titleCn, src, selectedGridSize)
+                                        audioPlayer.playPageFlip()
+                                        selectedPresetForDetail = firstPreset
+                                        isDailyChallengeSelected = true
                                     }
                                 },
                                 colors = ButtonDefaults.buttonColors(
@@ -322,18 +349,34 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(14.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = { isAnimalCategory = false },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = if (!isAnimalCategory) NeonPink else Color(0x15FFFFFF))
-                        ) { Text("抽象風格") }
-                        Button(
-                            onClick = { isAnimalCategory = true },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = if (isAnimalCategory) NeonPink else Color(0x15FFFFFF))
-                        ) { Text("可愛動物") }
+                        PresetPuzzle.Category.values().forEach { category ->
+                            val label = when (category) {
+                                PresetPuzzle.Category.ABSTRACT -> "抽象風格"
+                                PresetPuzzle.Category.ANIMALS -> "可愛動物"
+                                PresetPuzzle.Category.BIBLE -> "聖經故事"
+                            }
+                            val isSelected = selectedCategory == category
+                            Button(
+                                onClick = { 
+                                    audioPlayer.playButtonClick()
+                                    selectedCategory = category 
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSelected) NeonPink else Color(0x15FFFFFF)
+                                )
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(18.dp))
                     Text(
@@ -369,7 +412,10 @@ fun HomeScreen(
                                         ),
                                         RoundedCornerShape(14.dp)
                                     )
-                                    .clickable { if (size != -1) selectedGridSize = size else if (selectedGridSize < 3 || selectedGridSize > 5) {} else selectedGridSize = 6 }
+                                    .clickable { 
+                                        audioPlayer.playButtonClick()
+                                        if (size != -1) selectedGridSize = size else if (selectedGridSize < 3 || selectedGridSize > 5) {} else selectedGridSize = 6 
+                                    }
                                     .testTag("diff_chip_$size"),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -391,7 +437,13 @@ fun HomeScreen(
                         )
                         androidx.compose.material3.Slider(
                             value = selectedGridSize.toFloat(),
-                            onValueChange = { selectedGridSize = it.toInt() },
+                            onValueChange = { 
+                                val prev = selectedGridSize
+                                selectedGridSize = it.toInt()
+                                if (prev != selectedGridSize) {
+                                    audioPlayer.playTick()
+                                }
+                            },
                             valueRange = 2f..10f,
                             steps = 8
                         )
@@ -429,6 +481,7 @@ fun HomeScreen(
                         .clip(RoundedCornerShape(24.dp))
                         .border(BorderStroke(1.dp, NeonPink.copy(alpha = 0.4f)), RoundedCornerShape(24.dp))
                         .clickable {
+                            audioPlayer.playButtonClick()
                             pickerLauncher.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                             )
@@ -543,6 +596,7 @@ fun HomeScreen(
                                 // Play Button
                                 IconButton(
                                     onClick = {
+                                        audioPlayer.playPageFlip()
                                         onNavigateToPlay(puzzleId, puzzle.title, puzzle.filePath, selectedGridSize)
                                     },
                                     modifier = Modifier
@@ -564,6 +618,7 @@ fun HomeScreen(
                                 // Delete button
                                 IconButton(
                                     onClick = {
+                                        audioPlayer.playButtonClick()
                                         viewModel.deleteCustomPuzzle(puzzle.id)
                                     },
                                     modifier = Modifier.size(36.dp)
@@ -621,8 +676,8 @@ fun HomeScreen(
                                             RoundedCornerShape(22.dp)
                                         )
                                         .clickable {
-                                            val src = preset.imageRes!!
-                                            onNavigateToPlay(preset.id, preset.titleCn, src, selectedGridSize)
+                                            audioPlayer.playPageFlip()
+                                            selectedPresetForDetail = preset
                                         }
                                         .testTag("preset_card_${preset.id}"),
                                     colors = CardDefaults.cardColors(containerColor = CyberSurface)
@@ -758,7 +813,9 @@ fun HomeScreen(
                 showCustomNameDialog = false
                 pendingCustomUri = null
             },
-            containerColor = CyberSurface,
+            modifier = Modifier.border(BorderStroke(1.5.dp, NeonPink.copy(alpha = 0.8f)), RoundedCornerShape(24.dp)),
+            containerColor = Color(0xFF161421),
+            shape = RoundedCornerShape(24.dp),
             title = {
                 Text(text = "命名自訂拼圖", color = Color.White, fontWeight = FontWeight.Bold)
             },
@@ -783,6 +840,7 @@ fun HomeScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        audioPlayer.playAchievement()
                         val uri = pendingCustomUri
                         if (uri != null) {
                             val path = saveUriToInternalStorage(uri)
@@ -804,6 +862,7 @@ fun HomeScreen(
             },
             dismissButton = {
                 TextButton(onClick = {
+                    audioPlayer.playButtonClick()
                     showCustomNameDialog = false
                     pendingCustomUri = null
                 }) {
@@ -811,5 +870,198 @@ fun HomeScreen(
                 }
             }
         )
+    }
+
+    // Preset Detail Dialog (Popup scripture description & pre-game preview)
+    if (selectedPresetForDetail != null) {
+        val preset = selectedPresetForDetail!!
+        Dialog(
+            onDismissRequest = {
+                selectedPresetForDetail = null
+                isDailyChallengeSelected = false
+            }
+        ) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .padding(vertical = 24.dp)
+                    .border(BorderStroke(1.5.dp, NeonPink.copy(alpha = 0.8f)), RoundedCornerShape(28.dp)),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF161421)),
+                shape = RoundedCornerShape(28.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Header title & Close Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isDailyChallengeSelected) "📅 今日每日挑戰 • $dateString" else "📖 關卡詳情與經文",
+                            color = if (isDailyChallengeSelected) NeonPink else NeonCyan,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 0.5.sp
+                        )
+                        IconButton(
+                            onClick = {
+                                audioPlayer.playButtonClick()
+                                selectedPresetForDetail = null
+                                isDailyChallengeSelected = false
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "關閉",
+                                tint = NeonPink,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Image preview
+                    if (preset.imageRes != null) {
+                        Image(
+                            painter = painterResource(id = preset.imageRes),
+                            contentDescription = preset.titleCn,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1.1f)
+                                .clip(RoundedCornerShape(18.dp))
+                                .border(BorderStroke(1.5.dp, Color(0x33FFFFFF)), RoundedCornerShape(18.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Titles
+                    Text(
+                        text = preset.titleCn,
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Black,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = preset.titleEn,
+                        color = NeonPink.copy(alpha = 0.9f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Description Scrollbox
+                    val descText = (if (isDailyChallengeSelected) "【今日特別挑戰項目】\n\n" else "") + (preset.descriptionCn ?: "這是一個精美的預設關卡拼圖。點擊下方按鈕即可開始挑戰！")
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F0C1B)),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, NeonPink.copy(alpha = 0.2f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp)
+                        ) {
+                            Text(
+                                text = descText,
+                                color = Color.White.copy(alpha = 0.95f),
+                                fontSize = 16.sp,
+                                lineHeight = 26.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Difficulty selector directly in detail popup
+                    Text(
+                        text = "⚙️ 選擇拼圖難度",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.align(Alignment.Start)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            3 to "新手 3x3",
+                            4 to "極客 4x4",
+                            5 to "大師 5x5"
+                        ).forEach { (size, label) ->
+                            val isSelected = selectedGridSize == size
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) NeonPink.copy(alpha = 0.25f) else Color(0x0AFFFFFF))
+                                    .border(
+                                        BorderStroke(
+                                            if (isSelected) 1.5.dp else 1.dp,
+                                            if (isSelected) NeonPink else Color(0x15FFFFFF)
+                                        ),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .clickable {
+                                        audioPlayer.playButtonClick()
+                                        selectedGridSize = size
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    color = if (isSelected) Color.White else TextSecondary,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Play Button
+                    Button(
+                        onClick = {
+                            audioPlayer.playPageFlip()
+                            val src = preset.imageRes!!
+                            val playId = if (isDailyChallengeSelected) dailyChallengeId else preset.id
+                            val playTitle = if (isDailyChallengeSelected) "【每日挑戰】" + preset.titleCn else preset.titleCn
+                            onNavigateToPlay(playId, playTitle, src, selectedGridSize)
+                            selectedPresetForDetail = null
+                            isDailyChallengeSelected = false
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clip(RoundedCornerShape(14.dp)),
+                        colors = ButtonDefaults.buttonColors(containerColor = NeonPink)
+                    ) {
+                        Text(
+                            text = "開始挑戰",
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
     }
 }

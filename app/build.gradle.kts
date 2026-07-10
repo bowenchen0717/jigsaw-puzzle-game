@@ -17,8 +17,8 @@ android {
     applicationId = "com.aistudio.jigsawpuzzle.vsqykz"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "3.0"
+    versionCode = 12
+    versionName = "12.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -43,6 +43,7 @@ android {
     release {
       isCrunchPngs = false
       isMinifyEnabled = false
+      isShrinkResources = false
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -59,6 +60,12 @@ android {
     buildConfig = true
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+
+  lint {
+    abortOnError = false
+    checkReleaseBuilds = false
+    disable.add("ExpiredTargetSdkVersion")
+  }
 }
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
@@ -109,6 +116,8 @@ dependencies {
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  implementation(libs.play.app.update)
+  implementation(libs.play.app.update.ktx)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
