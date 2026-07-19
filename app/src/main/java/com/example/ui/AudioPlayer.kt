@@ -5,6 +5,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import kotlin.math.*
 
@@ -23,22 +24,36 @@ enum class SoundType {
     ACHIEVEMENT
 }
 
-class AudioPlayer(context: Context) {
+class AudioPlayer(private val context: Context) {
     private val executor = Executors.newSingleThreadExecutor()
-    private val tracks = mutableMapOf<SoundType, AudioTrack>()
+    private val samplesMap = ConcurrentHashMap<SoundType, ShortArray>()
+    private val tracks = ConcurrentHashMap<SoundType, AudioTrack>()
     private val sampleRate = 22050
 
     init {
         executor.execute {
             try {
                 for (type in SoundType.values()) {
-                    val samples = generateSamples(type)
-                    val track = createStaticTrack(samples)
-                    tracks[type] = track
+                    samplesMap[type] = generateSamples(type)
                 }
             } catch (e: Exception) {
-                Log.e("AudioPlayer", "Error pre-synthesizing sounds", e)
+                Log.e("AudioPlayer", "Error pre-synthesizing sound samples", e)
             }
+        }
+    }
+
+    private fun getOrCreateTrack(type: SoundType): AudioTrack? {
+        val existing = tracks[type]
+        if (existing != null) return existing
+
+        val samples = samplesMap[type] ?: generateSamples(type).also { samplesMap[type] = it }
+        return try {
+            val track = createStaticTrack(samples)
+            tracks[type] = track
+            track
+        } catch (e: Exception) {
+            Log.e("AudioPlayer", "Error creating AudioTrack for $type", e)
+            null
         }
     }
 
@@ -51,7 +66,7 @@ class AudioPlayer(context: Context) {
         val dataSizeInBytes = samples.size * 2
         val bufferSize = maxOf(minBufferSize, dataSizeInBytes)
 
-        val track = AudioTrack.Builder()
+        val builder = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_GAME)
@@ -67,8 +82,12 @@ class AudioPlayer(context: Context) {
             )
             .setBufferSizeInBytes(bufferSize)
             .setTransferMode(AudioTrack.MODE_STATIC)
-            .build()
 
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            builder.setContext(context)
+        }
+
+        val track = builder.build()
         track.write(samples, 0, samples.size)
         return track
     }
@@ -277,7 +296,7 @@ class AudioPlayer(context: Context) {
         if (!AudioConfig.isEnabled) return
         executor.execute {
             try {
-                val track = tracks[type]
+                val track = getOrCreateTrack(type)
                 if (track != null) {
                     track.stop()
                     track.reloadStaticData()
@@ -316,5 +335,6 @@ class AudioPlayer(context: Context) {
             }
         }
         tracks.clear()
+        samplesMap.clear()
     }
 }

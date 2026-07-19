@@ -50,7 +50,14 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 var currentScreen by remember { mutableStateOf<Screen>(Screen.Home) }
                 val context = LocalContext.current
-                val audioPlayer = remember { AudioPlayer(context) }
+                val audioPlayer = remember(context) {
+                    val audioContext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        context.applicationContext.createAttributionContext("audio")
+                    } else {
+                        context.applicationContext
+                    }
+                    AudioPlayer(audioContext)
+                }
 
                 // System back press handler
                 BackHandler(enabled = currentScreen !is Screen.Home) {

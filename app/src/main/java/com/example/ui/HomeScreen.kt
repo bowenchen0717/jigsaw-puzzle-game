@@ -51,7 +51,10 @@ import java.io.FileOutputStream
 import androidx.compose.ui.window.Dialog
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.filled.Close
+import com.example.data.RemoteConfigManager
+import com.example.data.UserPreferences
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,9 +70,46 @@ fun HomeScreen(
     val historyList by viewModel.historyList.collectAsStateWithLifecycle()
 
     var selectedGridSize by remember { mutableStateOf(3) } // Default 3x3
-    var selectedCategory by remember { mutableStateOf(PresetPuzzle.Category.ABSTRACT) }
-    val filteredPresets = remember(selectedCategory) {
-        PuzzlePresets.list.filter { it.category == selectedCategory }
+
+    // Remote Config State Flows
+    val latestVersionCode by RemoteConfigManager.latestVersionCode.collectAsStateWithLifecycle()
+    val updateMessage by RemoteConfigManager.updateMessage.collectAsStateWithLifecycle()
+    val announcementText by RemoteConfigManager.announcementText.collectAsStateWithLifecycle()
+    val isAnnouncementVisibleConfig by RemoteConfigManager.isAnnouncementVisible.collectAsStateWithLifecycle()
+    val featuredPuzzleId by RemoteConfigManager.featuredPuzzleId.collectAsStateWithLifecycle()
+    val remotePuzzles by RemoteConfigManager.remotePuzzles.collectAsStateWithLifecycle()
+
+    // 固定成本機的分類，以解決風景名勝與其他分類載入及顯示問題
+    val localCategories = remember {
+        listOf(
+            PresetPuzzle.Category.SCENERY,
+            PresetPuzzle.Category.BIBLE,
+            PresetPuzzle.Category.ABSTRACT,
+            PresetPuzzle.Category.ANIMALS
+        )
+    }
+
+    var selectedCategory by remember(UserPreferences.preferredCategoryId) {
+        val preferredId = UserPreferences.preferredCategoryId
+        val preferred = localCategories.find { it.id.equals(preferredId, ignoreCase = true) }
+        mutableStateOf(preferred ?: PresetPuzzle.Category.SCENERY)
+    }
+
+    val allPuzzles = remember(remotePuzzles) {
+        val presetMap = PuzzlePresets.list.associateBy { it.id }.toMutableMap()
+        for (remote in remotePuzzles) {
+            presetMap[remote.id] = remote
+        }
+        presetMap.values.toList()
+    }
+
+    val filteredPresets = remember(selectedCategory, allPuzzles) {
+        val categoryPuzzles = allPuzzles.filter { it.category.id.equals(selectedCategory.id, ignoreCase = true) }
+        if (categoryPuzzles.size > 10) {
+            categoryPuzzles.shuffled().take(10)
+        } else {
+            categoryPuzzles
+        }
     }
     val calendar = remember { java.util.Calendar.getInstance() }
     val year = calendar.get(java.util.Calendar.YEAR)
@@ -78,10 +118,19 @@ fun HomeScreen(
     val dateString = String.format("%04d-%02d-%02d", year, month, day)
     val dailyChallengeId = "daily_$dateString"
 
-    val dailyPreset = remember(year, month, day) {
+    val dailyPreset = remember(year, month, day, allPuzzles, UserPreferences.preferredCategoryId) {
+        if (allPuzzles.isEmpty()) return@remember null
+        val preferredId = UserPreferences.preferredCategoryId
+        val candidates = if (!preferredId.isNullOrEmpty()) {
+            allPuzzles.filter { it.category.id == preferredId }
+        } else {
+            emptyList()
+        }
+        val targetList = if (candidates.isNotEmpty()) candidates else allPuzzles
+
         val seed = year * 10000 + month * 100 + day
-        val index = (seed % PuzzlePresets.list.size).let { if (it < 0) -it else it }
-        PuzzlePresets.list.getOrNull(index) ?: PuzzlePresets.list.first()
+        val index = (seed % targetList.size).let { if (it < 0) -it else it }
+        targetList.getOrNull(index) ?: targetList.first()
     }
     val dailyRecord = remember(dailyChallengeId, selectedGridSize, historyList) {
         historyList.find { it.puzzleId == dailyChallengeId && it.difficulty == selectedGridSize }
@@ -95,6 +144,9 @@ fun HomeScreen(
     var customPuzzleName by remember { mutableStateOf("") }
     var selectedPresetForDetail by remember { mutableStateOf<PresetPuzzle?>(null) }
     var isDailyChallengeSelected by remember { mutableStateOf(false) }
+
+    var isAnnouncementDismissed by remember { mutableStateOf(false) }
+    var isUpdateDismissed by remember { mutableStateOf(false) }
 
     val pickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -150,11 +202,13 @@ fun HomeScreen(
                             )
                         }
                         Text(
-                            text = "動感拼圖 PixelPuzzle",
+                            text = "我行我速拼圖快手",
                             fontWeight = FontWeight.Black,
-                            fontSize = 19.sp,
+                            fontSize = 18.sp,
                             color = Color.White,
-                            letterSpacing = 0.5.sp
+                            letterSpacing = 0.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 },
@@ -187,6 +241,136 @@ fun HomeScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
+            // Dynamic Update Banner (Remote Config)
+            if (latestVersionCode > com.example.BuildConfig.VERSION_CODE && !isUpdateDismissed) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(Color(0xFFE65100), Color(0xFFF57C00), Color(0xFFFFB74D))
+                                )
+                            )
+                            .border(BorderStroke(1.dp, Color(0x66FFFFFF)), RoundedCornerShape(24.dp))
+                            .padding(16.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("🚀", fontSize = 20.sp)
+                                    Text(
+                                        text = "發現新版本 V$latestVersionCode.0",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { isUpdateDismissed = true },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "關閉",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = updateMessage,
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(
+                                onClick = {
+                                    android.widget.Toast.makeText(context, "正在啟動 Google Play 更新程序...", android.widget.Toast.LENGTH_LONG).show()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color(0xFFE65100)),
+                                shape = RoundedCornerShape(50.dp),
+                                modifier = Modifier.align(Alignment.End),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "立即更新",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // System Announcement Banner (Remote Config)
+            val isCurrentAnnouncementDismissed = isAnnouncementDismissed || (announcementText.isNotEmpty() && announcementText == UserPreferences.dismissedAnnouncement)
+            if (isAnnouncementVisibleConfig && !isCurrentAnnouncementDismissed && announcementText.isNotEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color(0x33FFFFFF))
+                            .border(BorderStroke(1.dp, Color(0x22FFFFFF)), RoundedCornerShape(24.dp))
+                            .padding(16.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("📢", fontSize = 18.sp)
+                                    Text(
+                                        text = "系統公告",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { 
+                                        isAnnouncementDismissed = true
+                                        UserPreferences.dismissAnnouncement(context, announcementText)
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "關閉",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = announcementText,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            )
+                        }
+                    }
+                }
+            }
+
             // Hero Arcade Banner Card (Frosted Glass style Daily Challenge Highlight)
             item {
                 Box(
@@ -240,7 +424,7 @@ fun HomeScreen(
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                if (dailyIsCompleted && dailyRecord != null) {
+                                if (dailyIsCompleted) {
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
                                         text = "🏆 今日已通關！最佳: ${dailyRecord.bestTime}秒 | ${dailyRecord.bestMoves}步",
@@ -253,7 +437,7 @@ fun HomeScreen(
                             
                             val dailyPainter = rememberAsyncImagePainter(
                                 model = ImageRequest.Builder(LocalContext.current)
-                                    .data(dailyPreset?.imageRes ?: R.drawable.img_app_icon_1782897535121)
+                                    .data(dailyPreset?.imageRes ?: (dailyPreset?.imageUrl ?: R.drawable.img_app_icon_1782897535121))
                                     .crossfade(true)
                                     .build()
                             )
@@ -316,11 +500,17 @@ fun HomeScreen(
                                     containerColor = Color.White,
                                     contentColor = Color(0xFF381E72)
                                 ),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                                 modifier = Modifier.height(34.dp),
                                 shape = RoundedCornerShape(50.dp)
                             ) {
-                                Text(text = dailyButtonText, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = dailyButtonText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
                             }
                         }
                     }
@@ -348,23 +538,20 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        PresetPuzzle.Category.values().forEach { category ->
-                            val label = when (category) {
-                                PresetPuzzle.Category.ABSTRACT -> "抽象風格"
-                                PresetPuzzle.Category.ANIMALS -> "可愛動物"
-                                PresetPuzzle.Category.BIBLE -> "聖經故事"
-                            }
-                            val isSelected = selectedCategory == category
+                        localCategories.forEach { category ->
+                            val label = category.nameCn
+                            val isSelected = selectedCategory.id.equals(category.id, ignoreCase = true)
                             Button(
                                 onClick = { 
                                     audioPlayer.playButtonClick()
                                     selectedCategory = category 
                                 },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = if (isSelected) NeonPink else Color(0x15FFFFFF)
                                 )
@@ -373,6 +560,7 @@ fun HomeScreen(
                                     text = label,
                                     fontSize = 12.sp,
                                     maxLines = 1,
+                                    softWrap = false,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
@@ -390,7 +578,7 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(14.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf(
                             3 to "新手 3x3",
@@ -423,7 +611,10 @@ fun HomeScreen(
                                     text = label,
                                     color = if (isSelected) Color.White else TextSecondary,
                                     fontWeight = if (isSelected) FontWeight.Black else FontWeight.Normal,
-                                    fontSize = 13.sp
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -577,7 +768,7 @@ fun HomeScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
-                                    if (isCompleted && record != null) {
+                                    if (isCompleted) {
                                         Text(
                                             text = "最佳: ${record.bestTime}秒 / ${record.bestMoves}步",
                                             color = NeonCyan,
@@ -636,10 +827,10 @@ fun HomeScreen(
                 }
             }
 
-            // Preset Puzzles Section (10 items)
+            // Preset Puzzles Section (up to 10 items)
             item {
                 Text(
-                    text = "🏆 精選潮流預設關卡 (10)",
+                    text = "🏆 精選潮流預設關卡 (${filteredPresets.size})",
                     color = Color.White,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
@@ -663,16 +854,20 @@ fun HomeScreen(
                                 val record = historyList.find { it.puzzleId == preset.id && it.difficulty == selectedGridSize }
                                 val isCompleted = record?.isCompleted == true
 
+                                val isFeatured = preset.id == featuredPuzzleId
+                                val borderStroke = when {
+                                    isFeatured -> BorderStroke(2.5.dp, Brush.linearGradient(listOf(Color(0xFFFFD700), Color(0xFFFF5722))))
+                                    isCompleted -> BorderStroke(2.dp, NeonCyan.copy(alpha = 0.9f))
+                                    else -> BorderStroke(1.dp, BorderColor)
+                                }
+
                                 Card(
                                     modifier = Modifier
                                         .weight(1f)
                                         .aspectRatio(0.82f)
                                         .clip(RoundedCornerShape(22.dp))
                                         .border(
-                                            BorderStroke(
-                                                if (isCompleted) 2.dp else 1.dp,
-                                                if (isCompleted) NeonCyan.copy(alpha = 0.9f) else BorderColor
-                                            ),
+                                            borderStroke,
                                             RoundedCornerShape(22.dp)
                                         )
                                         .clickable {
@@ -684,10 +879,10 @@ fun HomeScreen(
                                 ) {
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         // Image or Procedural Placeholder
-                                        if (preset.imageRes != null) {
+                                        if (preset.imageRes != null || !preset.imageUrl.isNullOrEmpty()) {
                                             val cardPainter = rememberAsyncImagePainter(
                                                 model = ImageRequest.Builder(LocalContext.current)
-                                                    .data(preset.imageRes)
+                                                    .data(preset.imageRes ?: (preset.imageUrl ?: ""))
                                                     .crossfade(true)
                                                     .build()
                                             )
@@ -721,6 +916,29 @@ fun HomeScreen(
                                                     fontSize = 11.sp,
                                                     textAlign = TextAlign.Center,
                                                     letterSpacing = 0.5.sp
+                                                )
+                                            }
+                                        }
+
+                                        // Featured Badge (Remote Config)
+                                        if (isFeatured) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .padding(8.dp)
+                                                    .align(Alignment.TopStart)
+                                                    .background(
+                                                        Brush.horizontalGradient(listOf(Color(0xFFFFD700), Color(0xFFFF5722))),
+                                                        RoundedCornerShape(10.dp)
+                                                    )
+                                                    .border(BorderStroke(1.dp, Color.White.copy(alpha = 0.5f)), RoundedCornerShape(10.dp))
+                                                    .padding(horizontal = 8.dp, vertical = 3.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "🔥 推薦",
+                                                    color = Color.White,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Black
                                                 )
                                             }
                                         }
@@ -930,18 +1148,22 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Image preview
-                    if (preset.imageRes != null) {
-                        Image(
-                            painter = painterResource(id = preset.imageRes),
-                            contentDescription = preset.titleCn,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(1.1f)
-                                .clip(RoundedCornerShape(18.dp))
-                                .border(BorderStroke(1.5.dp, Color(0x33FFFFFF)), RoundedCornerShape(18.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
+                    val previewPainter = rememberAsyncImagePainter(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(preset.imageRes ?: (preset.imageUrl ?: ""))
+                            .crossfade(true)
+                            .build()
+                    )
+                    Image(
+                        painter = previewPainter,
+                        contentDescription = preset.titleCn,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1.1f)
+                            .clip(RoundedCornerShape(18.dp))
+                            .border(BorderStroke(1.5.dp, Color(0x33FFFFFF)), RoundedCornerShape(18.dp)),
+                        contentScale = ContentScale.Crop
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -1028,7 +1250,10 @@ fun HomeScreen(
                                     text = label,
                                     color = if (isSelected) Color.White else TextSecondary,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 11.sp
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -1040,7 +1265,7 @@ fun HomeScreen(
                     Button(
                         onClick = {
                             audioPlayer.playPageFlip()
-                            val src = preset.imageRes!!
+                            val src = preset.imageRes ?: (preset.imageUrl ?: "")
                             val playId = if (isDailyChallengeSelected) dailyChallengeId else preset.id
                             val playTitle = if (isDailyChallengeSelected) "【每日挑戰】" + preset.titleCn else preset.titleCn
                             onNavigateToPlay(playId, playTitle, src, selectedGridSize)
